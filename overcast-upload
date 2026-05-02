@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""Upload a podcast episode to Overcast.fm."""
+
+import argparse
+import getpass
+import os
+import subprocess
+import sys
+from html.parser import HTMLParser
+from pathlib import Path
+
+import requests
+
+BASE_URL = "https://overcast.fm"
+LOGIN_URL = f"{BASE_URL}/login"
+UPLOADS_URL = f"{BASE_URL}/uploads"
+UPLOAD_SUCCEEDED_URL = f"{BASE_URL}/podcasts/upload_succeeded"
+
+CREDENTIALS_PATH = Path("~/.config/overcast-upload/credentials").expanduser()
+
+
+class UploadFormParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.form_action = None
+        self.hidden_fields = {}
+        self.file_field_name = "file"
+        self._in_form = False
+        self._current_action = None
+        self._current_hidden = {}
+        self._current_file_field = None
+        self._best_score = 0
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "form":
+            self._in_form = True
+            action = attrs.get("action", "/uploads")
+            self._current_action = action if action.startswith("http") else BASE_URL + action
+            self._current_hidden = {}
+            self._current_file_field = None
+        elif tag == "input" and self._in_form:
+            input_type = attrs.get("type", "").lower()
+            name = attrs.get("name", "")
+            if input_type == "hidden" and name:
+                self._current_hidden[name] = attrs.get("value", "")
+            elif input_type == "file" and name:
+                self._current_file_field = name
+
+    def handle_endtag(self, tag):
+        if tag == "form":
+            self._in_form = False
+            # Pick the form with the most hidden fields + file input.
+            # The S3 upload form has 7 hidden fields; the delete form has very few.
+            score = (10 if self._current_file_field else 0) + len(self._current_hidden)
+            if score > self._best_score:
+                self._best_score = score
+                self.form_action = self._current_action
+                self.hidden_fields = dict(self._current_hidden)
+                if self._current_file_field:
+                    self.file_field_name = self._current_file_field
+
+
+def filter_filename(filename):
+    """Replicate Overcast's JS filterFilename: strip chars that S3 rejects."""
+    filename = filename.replace(",", "").replace("/", "")
+    if not filename:
+        filename = "Upload"
+    while filename and (filename[0] == "." or filename[0] == " "):
+        if filename[0] == "." and filename.find(".") == filename.rfind("."):
+            filename = "Upload" + filename
+        else:
+            filename = filename[1:]
+    return filename
+
+
+def notify(title, message):
+    subprocess.run(
+        ["osascript", "-e", f'display notification "{message}" with title "{title}"'],
+        capture_output=True,
+    )
+
+
+def read_credentials_file():
+    if not CREDENTIALS_PATH.exists():
+        return None, None
+    data = {}
+    for line in CREDENTIALS_PATH.read_text().splitlines():
+        line = line.strip()
+        if "=" in line and not line.startswith("#"):
+            k, _, v = line.partition("=")
+            data[k.strip()] = v.strip()
+    return data.get("email"), data.get("password")
+
+
+def save_credentials_file(email, password):
+    CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CREDENTIALS_PATH.write_text(f"email={email}\npassword={password}\n")
+    CREDENTIALS_PATH.chmod(0o600)
+
+
+def prompt_for_credentials():
+    print("Enter your Overcast credentials:")
+    email = input("Email: ").strip()
+    if not email:
+        print("Error: Email is required.", file=sys.stderr)
+        sys.exit(1)
+    password = getpass.getpass("Password: ")
+    if not password:
+        print("Error: Password is required.", file=sys.stderr)
+        sys.exit(1)
+    save_credentials_file(email, password)
+    print(f"Credentials saved to {CREDENTIALS_PATH}")
+    return email, password
+
+
+def get_credentials():
+    # 1. Env vars (useful for automation or `op run` power users)
+    email = os.environ.get("OVERCAST_EMAIL")
+    password = os.environ.get("OVERCAST_PASSWORD")
+    if email and password:
+        return email, password
+
+    # 2. Credentials file
+    email, password = read_credentials_file()
+    if email and password:
+        return email, password
+
+    # 3. Prompt and save
+    print("No credentials found. Run `overcast-upload --setup` to configure.")
+    print("Or set OVERCAST_EMAIL and OVERCAST_PASSWORD environment variables.\n")
+    return prompt_for_credentials()
+
+
+def login(session, email, password):
+    try:
+        resp = session.post(
+            LOGIN_URL,
+            data={"email": email, "password": password, "then": "podcasts"},
+            allow_redirects=True,
+            timeout=30,
+        )
+    except requests.ConnectionError:
+        print("Error: Could not reach overcast.fm. Check your connection.", file=sys.stderr)
+        sys.exit(1)
+
+    if "/login" in resp.url:
+        print("Error: Login failed. Check your Overcast email and password.", file=sys.stderr)
+        sys.exit(1)
+
+
+def get_upload_form(session):
+    try:
+        resp = session.get(UPLOADS_URL, timeout=30)
+    except requests.ConnectionError:
+        print("Error: Could not reach overcast.fm. Check your connection.", file=sys.stderr)
+        sys.exit(1)
+
+    if "/login" in resp.url:
+        print("Error: Session expired or login failed.", file=sys.stderr)
+        sys.exit(1)
+
+    parser = UploadFormParser()
+    parser.feed(resp.text)
+
+    if not parser.form_action:
+        print(
+            "Error: Could not find upload form. Overcast may have changed their site.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    return parser
+
+
+def upload_file(session, filepath, form):
+    raw_filename = Path(filepath).name
+    filename = filter_filename(raw_filename)
+    key_prefix = form.hidden_fields.get("key", "").replace("${filename}", "")
+    s3_key = key_prefix + filename
+
+    size_mb = Path(filepath).stat().st_size / 1_000_000
+    print(f"Uploading {filename} ({size_mb:.1f} MB)...")
+
+    # Build fields: all hidden fields with the resolved key, then the file last.
+    # S3 presigned POST requires the file field to be last.
+    hidden = dict(form.hidden_fields)
+    hidden["key"] = s3_key
+    try:
+        fields = [(k, (None, v)) for k, v in hidden.items()]
+        with open(filepath, "rb") as f:
+            fields.append((form.file_field_name, (filename, f)))
+            s3_resp = session.post(form.form_action, files=fields, timeout=300)
+    except requests.ConnectionError:
+        print("Error: Connection lost during upload. Check your connection.", file=sys.stderr)
+        sys.exit(1)
+
+    if s3_resp.status_code >= 400:
+        print(f"Error: Upload failed (HTTP {s3_resp.status_code}).", file=sys.stderr)
+        sys.exit(1)
+
+    # Notify Overcast that the S3 upload is complete — this makes the file appear in the library.
+    try:
+        notify_resp = session.post(UPLOAD_SUCCEEDED_URL, data={"key": s3_key}, timeout=30)
+    except requests.ConnectionError:
+        print("Error: Upload to S3 succeeded but could not notify Overcast.", file=sys.stderr)
+        sys.exit(1)
+
+    if notify_resp.status_code >= 400:
+        print(
+            f"Error: S3 upload succeeded but Overcast notification failed "
+            f"(HTTP {notify_resp.status_code}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def run_setup(do_notify=False):
+    print("overcast-upload setup\n")
+
+    email, password = prompt_for_credentials()
+    print()
+
+    print("Testing login...")
+    session = requests.Session()
+    session.headers["User-Agent"] = "overcast-upload/1.0"
+    login(session, email, password)
+    print("Login successful.\n")
+
+    form = get_upload_form(session)
+    print(f"Upload form: {form.form_action}")
+    print("\nSetup complete.")
+    if do_notify:
+        notify("Overcast Upload", "Setup complete.")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Upload a podcast episode to Overcast.fm",
+        usage="overcast-upload [--setup] [--notify] file",
+    )
+    parser.add_argument("file", nargs="?", help="Path to the episode file to upload")
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Save Overcast credentials and verify they work",
+    )
+    parser.add_argument(
+        "--notify",
+        action="store_true",
+        help="Show macOS notification on completion (used by Finder Quick Action)",
+    )
+    args = parser.parse_args()
+
+    if args.setup:
+        run_setup(do_notify=args.notify)
+        return
+
+    if not args.file:
+        parser.print_usage()
+        sys.exit(1)
+
+    filepath = Path(args.file)
+    if not filepath.exists():
+        msg = f"File not found: {args.file}"
+        print(f"Error: {msg}", file=sys.stderr)
+        if args.notify:
+            notify("Overcast Upload Failed", msg)
+        sys.exit(1)
+
+    email, password = get_credentials()
+
+    session = requests.Session()
+    session.headers["User-Agent"] = "overcast-upload/1.0"
+
+    try:
+        login(session, email, password)
+        form = get_upload_form(session)
+        upload_file(session, filepath, form)
+    except SystemExit:
+        if args.notify:
+            notify("Overcast Upload Failed", f"Could not upload {filepath.name}.")
+        raise
+
+    print(f"Done! {filepath.name} uploaded to Overcast.")
+    if args.notify:
+        notify("Overcast Upload", f"{filepath.name} uploaded successfully.")
+
+
+if __name__ == "__main__":
+    main()
