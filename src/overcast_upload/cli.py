@@ -215,7 +215,7 @@ def get_upload_form(session, debug=False):
         )
         sys.exit(1)
 
-    missing = S3_REQUIRED_FIELDS - set(parser.hidden_fields)
+    missing = S3_REQUIRED_FIELDS - {k.lower() for k in parser.hidden_fields}
     if missing:
         print(
             f"Error: Upload form is missing required S3 fields: {sorted(missing)}. "
