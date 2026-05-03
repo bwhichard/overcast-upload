@@ -2,6 +2,8 @@
 
 A macOS CLI and Finder Quick Action for uploading podcast episodes directly to [Overcast](https://overcast.fm/uploads) without opening a browser.
 
+> **Disclaimer:** This tool reverse-engineers Overcast's web upload interface and will break if Overcast changes their site. It is not affiliated with or supported by Overcast. If something stops working, run `overcast-upload --debug` for diagnostic output and [open an issue](../../issues).
+
 ## What It Does
 
 Overcast lets you upload private audio files to your account so you can listen before publishing. Normally you have to log into the web UI, navigate to the uploads page, and manually select a file. This tool automates that entire flow from the command line or with a right-click in Finder.
