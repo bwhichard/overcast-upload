@@ -17,7 +17,7 @@ UPLOADS_URL = f"{BASE_URL}/uploads"
 UPLOAD_SUCCEEDED_URL = f"{BASE_URL}/podcasts/upload_succeeded"
 
 CREDENTIALS_PATH = Path("~/.config/overcast-upload/credentials").expanduser()
-S3_REQUIRED_FIELDS = {"key", "policy", "x-amz-algorithm"}
+S3_REQUIRED_FIELDS = {"key", "policy"}
 
 
 class UploadFormParser(HTMLParser):
@@ -215,6 +215,11 @@ def get_upload_form(session, debug=False):
         )
         sys.exit(1)
 
+    if debug:
+        print(f"[debug] form action: {parser.form_action}", file=sys.stderr)
+        print(f"[debug] hidden field keys: {sorted(parser.hidden_fields)}", file=sys.stderr)
+        print(f"[debug] file field name: {parser.file_field_name!r}", file=sys.stderr)
+
     missing = S3_REQUIRED_FIELDS - {k.lower() for k in parser.hidden_fields}
     if missing:
         print(
@@ -223,11 +228,6 @@ def get_upload_form(session, debug=False):
             file=sys.stderr,
         )
         sys.exit(1)
-
-    if debug:
-        print(f"[debug] form action: {parser.form_action}", file=sys.stderr)
-        print(f"[debug] hidden field keys: {sorted(parser.hidden_fields)}", file=sys.stderr)
-        print(f"[debug] file field name: {parser.file_field_name!r}", file=sys.stderr)
 
     return parser
 
