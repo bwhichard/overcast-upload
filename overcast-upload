@@ -75,9 +75,10 @@ def filter_filename(filename):
 
 
 def notify(title, message):
-    subprocess.run(
-        ["/usr/bin/osascript", "-e", f'display notification "{message}" with title "{title}"'],
-    )
+    subprocess.run([
+        "/usr/bin/osascript", "-e",
+        f'display notification "{message}" with title "{title}" sound name "Glass"',
+    ])
 
 
 def read_credentials_file():
