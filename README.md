@@ -16,24 +16,24 @@ overcast-upload "Example.mp3"
 
 - macOS
 - Python 3.9+
-- [pipx](https://pipx.pypa.io) — `brew install pipx && pipx ensurepath`
+- [uv](https://docs.astral.sh/uv/) — `brew install uv`
 
 ## Installation
 
-### 1. Install pipx (if you don't have it)
+### 1. Install uv (if you don't have it)
 
 ```bash
-brew install pipx && pipx ensurepath
+brew install uv
 ```
 
-[pipx](https://pipx.pypa.io) installs Python CLIs into isolated environments — no `sudo`, no dependency conflicts, clean uninstall.
+[uv](https://docs.astral.sh/uv/) is a fast Python package manager that installs CLI tools into isolated environments — no `sudo`, no dependency conflicts, clean uninstall.
 
 ### 2. Install overcast-upload
 
 From the repo root:
 
 ```bash
-pipx install .
+uv tool install .
 ```
 
 Or run `install.sh` which does this plus installs the Finder Quick Action:
@@ -42,7 +42,11 @@ Or run `install.sh` which does this plus installs the Finder Quick Action:
 bash install.sh
 ```
 
-If you don't have pipx, `pip3 install --user .` also works.
+For development (editable install):
+
+```bash
+uv pip install -e .
+```
 
 ### 3. Save your credentials
 
@@ -131,7 +135,7 @@ Overcast may have changed their site. Run `overcast-upload --debug` and open an 
 Same as above — Overcast's upload flow has changed. Open an issue with `--debug` output.
 
 **`overcast-upload` doesn't tab-complete after install**
-Run `rehash` in your current shell session to rebuild zsh's command index. New terminal windows will pick it up automatically.
+Run `rehash` in your current shell session to rebuild zsh's command index. New terminal windows will pick it up automatically. If using `uv tool install`, also ensure `$(uv tool bin-dir)` is on your PATH — run `uv tool update-shell` if needed.
 
 **Quick Action doesn't appear in Finder**
 Right-click → Quick Actions → Customize and enable "Upload to Overcast". If it's not listed, re-run the install and restart Finder.

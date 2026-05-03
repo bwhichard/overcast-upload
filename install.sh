@@ -9,14 +9,13 @@ echo
 
 # Install CLI
 echo "Installing overcast-upload..."
-if command -v pipx &>/dev/null; then
+if command -v uv &>/dev/null; then
+    uv tool install .
+elif command -v pipx &>/dev/null; then
+    echo "Note: uv not found — install it for a cleaner setup: brew install uv"
     pipx install .
-elif command -v pip3 &>/dev/null; then
-    echo "Note: pipx not found — install it for a cleaner setup: brew install pipx && pipx ensurepath"
-    echo "Falling back to: pip3 install --user ."
-    pip3 install --user .
 else
-    echo "Error: Python 3 not found. Install it and try again."
+    echo "Error: Install uv first: brew install uv"
     exit 1
 fi
 echo "Done."

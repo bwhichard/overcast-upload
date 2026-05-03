@@ -1,14 +1,15 @@
 """Upload a podcast episode to Overcast.fm."""
 
-import argparse
 import getpass
 import os
 import subprocess
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import Optional
 
 import requests
+import typer
 
 VERSION = "1.0"
 BASE_URL = "https://overcast.fm"
@@ -75,7 +76,7 @@ def filter_filename(filename):
     return filename
 
 
-def notify(title, message):
+def _send_notification(title, message):
     subprocess.run(
         ["/usr/bin/osascript", "-e",
          f'display notification "{message}" with title "{title}" sound name "Glass"'],
@@ -301,48 +302,37 @@ def run_setup(do_notify=False, debug=False):
     print(f"Upload form: {form.form_action}")
     print("\nSetup complete.")
     if do_notify:
-        notify("Overcast Upload", "Setup complete.")
+        _send_notification("Overcast Upload", "Setup complete.")
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Upload a podcast episode to Overcast.fm",
-        usage="overcast-upload [--setup] [--notify] file",
-    )
-    parser.add_argument("file", nargs="?", help="Path to the episode file to upload")
-    parser.add_argument(
-        "--setup",
-        action="store_true",
-        help="Save Overcast credentials and verify they work",
-    )
-    parser.add_argument(
-        "--notify",
-        action="store_true",
-        help="Show macOS notification on completion (used by Finder Quick Action)",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Print diagnostic information to stderr",
-    )
-    parser.add_argument("--version", action="version", version=f"overcast-upload {VERSION}")
-    args = parser.parse_args()
+def _version_callback(value: bool):
+    if value:
+        typer.echo(f"overcast-upload {VERSION}")
+        raise typer.Exit()
 
-    if args.setup:
-        run_setup(do_notify=args.notify, debug=args.debug)
+
+def _run(
+    file: Optional[Path] = typer.Argument(None, help="Path to the episode file to upload"),
+    setup: bool = typer.Option(False, "--setup", help="Save Overcast credentials and verify they work"),
+    notify: bool = typer.Option(False, "--notify", help="Show macOS notification on completion (used by Finder Quick Action)"),
+    debug: bool = typer.Option(False, "--debug", help="Print diagnostic information to stderr"),
+    version: Optional[bool] = typer.Option(None, "--version", callback=_version_callback, is_eager=True, help="Show version and exit"),
+):
+    if setup:
+        run_setup(do_notify=notify, debug=debug)
         return
 
-    if not args.file:
-        parser.print_usage()
-        sys.exit(1)
+    if not file:
+        typer.echo("Usage: overcast-upload [--setup] [--notify] FILE", err=True)
+        raise typer.Exit(1)
 
-    filepath = Path(args.file)
+    filepath = file
     if not filepath.exists():
-        msg = f"File not found: {args.file}"
-        print(f"Error: {msg}", file=sys.stderr)
-        if args.notify:
-            notify("Overcast Upload Failed", msg)
-        sys.exit(1)
+        msg = f"File not found: {file}"
+        typer.echo(f"Error: {msg}", err=True)
+        if notify:
+            _send_notification("Overcast Upload Failed", msg)
+        raise typer.Exit(1)
 
     email, password = get_credentials()
 
@@ -351,16 +341,20 @@ def main():
 
     try:
         login(session, email, password)
-        form = get_upload_form(session, debug=args.debug)
-        upload_file(session, filepath, form, debug=args.debug)
+        form = get_upload_form(session, debug=debug)
+        upload_file(session, filepath, form, debug=debug)
     except SystemExit:
-        if args.notify:
-            notify("Overcast Upload Failed", f"Could not upload {filepath.name}.")
+        if notify:
+            _send_notification("Overcast Upload Failed", f"Could not upload {filepath.name}.")
         raise
 
     print(f"Done! {filepath.name} uploaded to Overcast.")
-    if args.notify:
-        notify("Overcast Upload", f"{filepath.name} uploaded successfully.")
+    if notify:
+        _send_notification("Overcast Upload", f"{filepath.name} uploaded successfully.")
+
+
+def main():
+    typer.run(_run)
 
 
 if __name__ == "__main__":
