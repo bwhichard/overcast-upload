@@ -1,2 +1,0 @@
-[console_scripts]
-overcast-upload = overcast_upload.cli:main
