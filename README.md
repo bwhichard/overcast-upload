@@ -130,6 +130,9 @@ Overcast may have changed their site. Run `overcast-upload --debug` and open an 
 **"Upload form action does not look like an S3 endpoint"**
 Same as above — Overcast's upload flow has changed. Open an issue with `--debug` output.
 
+**`overcast-upload` doesn't tab-complete after install**
+Run `rehash` in your current shell session to rebuild zsh's command index. New terminal windows will pick it up automatically.
+
 **Quick Action doesn't appear in Finder**
 Right-click → Quick Actions → Customize and enable "Upload to Overcast". If it's not listed, re-run the install and restart Finder.
 
