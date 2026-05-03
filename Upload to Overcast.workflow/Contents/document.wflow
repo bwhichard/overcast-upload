@@ -59,7 +59,9 @@
 				<key>ActionParameters</key>
 				<dict>
 					<key>COMMAND_STRING</key>
-					<string>export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
+					<string>source ~/.zshrc 2>/dev/null
+
+export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.pyenv/shims:$PATH"
 
 for f in "$@"; do
     overcast-upload --notify "$f"
@@ -69,7 +71,7 @@ done</string>
 					<key>inputMethod</key>
 					<integer>1</integer>
 					<key>shell</key>
-					<string>/bin/bash</string>
+					<string>/bin/zsh</string>
 					<key>source</key>
 					<string></string>
 				</dict>
