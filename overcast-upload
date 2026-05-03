@@ -76,8 +76,7 @@ def filter_filename(filename):
 
 def notify(title, message):
     subprocess.run(
-        ["osascript", "-e", f'display notification "{message}" with title "{title}"'],
-        capture_output=True,
+        ["/usr/bin/osascript", "-e", f'display notification "{message}" with title "{title}"'],
     )
 
 
