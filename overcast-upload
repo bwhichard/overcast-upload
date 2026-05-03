@@ -11,12 +11,14 @@ from pathlib import Path
 
 import requests
 
+VERSION = "1.0"
 BASE_URL = "https://overcast.fm"
 LOGIN_URL = f"{BASE_URL}/login"
 UPLOADS_URL = f"{BASE_URL}/uploads"
 UPLOAD_SUCCEEDED_URL = f"{BASE_URL}/podcasts/upload_succeeded"
 
 CREDENTIALS_PATH = Path("~/.config/overcast-upload/credentials").expanduser()
+S3_REQUIRED_FIELDS = {"key", "policy", "x-amz-algorithm"}
 
 
 class UploadFormParser(HTMLParser):
@@ -75,10 +77,35 @@ def filter_filename(filename):
 
 
 def notify(title, message):
-    subprocess.run([
-        "/usr/bin/osascript", "-e",
-        f'display notification "{message}" with title "{title}" sound name "Glass"',
-    ])
+    subprocess.run(
+        ["/usr/bin/osascript", "-e",
+         f'display notification "{message}" with title "{title}" sound name "Glass"'],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _keychain_save(email, password):
+    result = subprocess.run(
+        ["security", "add-generic-password",
+         "-s", "overcast-upload", "-a", email, "-w", password, "-U"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return result.returncode == 0
+
+
+def _keychain_get(email):
+    result = subprocess.run(
+        ["security", "find-generic-password",
+         "-s", "overcast-upload", "-a", email, "-w"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
 def read_credentials_file():
@@ -93,10 +120,20 @@ def read_credentials_file():
     return data.get("email"), data.get("password")
 
 
-def save_credentials_file(email, password):
+def save_credentials(email, password):
     CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CREDENTIALS_PATH.write_text(f"email={email}\npassword={password}\n")
-    CREDENTIALS_PATH.chmod(0o600)
+    if _keychain_save(email, password):
+        CREDENTIALS_PATH.write_text(f"email={email}\n")
+        CREDENTIALS_PATH.chmod(0o600)
+        print(f"Email saved to {CREDENTIALS_PATH}; password saved to macOS Keychain.")
+    else:
+        print(
+            "Warning: Could not save password to Keychain. Falling back to plaintext (chmod 600).",
+            file=sys.stderr,
+        )
+        CREDENTIALS_PATH.write_text(f"email={email}\npassword={password}\n")
+        CREDENTIALS_PATH.chmod(0o600)
+        print(f"Credentials saved to {CREDENTIALS_PATH}")
 
 
 def prompt_for_credentials():
@@ -109,8 +146,7 @@ def prompt_for_credentials():
     if not password:
         print("Error: Password is required.", file=sys.stderr)
         sys.exit(1)
-    save_credentials_file(email, password)
-    print(f"Credentials saved to {CREDENTIALS_PATH}")
+    save_credentials(email, password)
     return email, password
 
 
@@ -121,10 +157,12 @@ def get_credentials():
     if email and password:
         return email, password
 
-    # 2. Credentials file
-    email, password = read_credentials_file()
-    if email and password:
-        return email, password
+    # 2. Credentials file email + Keychain password (plaintext fallback for old installs)
+    email, file_password = read_credentials_file()
+    if email:
+        password = _keychain_get(email) or file_password
+        if password:
+            return email, password
 
     # 3. Prompt and save
     print("No credentials found. Run `overcast-upload --setup` to configure.")
@@ -149,7 +187,7 @@ def login(session, email, password):
         sys.exit(1)
 
 
-def get_upload_form(session):
+def get_upload_form(session, debug=False):
     try:
         resp = session.get(UPLOADS_URL, timeout=30)
     except requests.ConnectionError:
@@ -170,14 +208,41 @@ def get_upload_form(session):
         )
         sys.exit(1)
 
+    if "s3.amazonaws.com" not in parser.form_action:
+        print(
+            f"Error: Upload form action does not look like an S3 endpoint "
+            f"({parser.form_action!r}). Overcast may have changed their site.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    missing = S3_REQUIRED_FIELDS - set(parser.hidden_fields)
+    if missing:
+        print(
+            f"Error: Upload form is missing required S3 fields: {sorted(missing)}. "
+            "Overcast may have changed their site.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if debug:
+        print(f"[debug] form action: {parser.form_action}", file=sys.stderr)
+        print(f"[debug] hidden field keys: {sorted(parser.hidden_fields)}", file=sys.stderr)
+        print(f"[debug] file field name: {parser.file_field_name!r}", file=sys.stderr)
+
     return parser
 
 
-def upload_file(session, filepath, form):
+def upload_file(session, filepath, form, debug=False):
     raw_filename = Path(filepath).name
     filename = filter_filename(raw_filename)
+    if filename != raw_filename:
+        print(f"Filename adjusted: {raw_filename!r} → {filename!r}")
     key_prefix = form.hidden_fields.get("key", "").replace("${filename}", "")
     s3_key = key_prefix + filename
+
+    if debug:
+        print(f"[debug] S3 key: {s3_key!r}", file=sys.stderr)
 
     size_mb = Path(filepath).stat().st_size / 1_000_000
     print(f"Uploading {filename} ({size_mb:.1f} MB)...")
@@ -197,6 +262,9 @@ def upload_file(session, filepath, form):
 
     if s3_resp.status_code >= 400:
         print(f"Error: Upload failed (HTTP {s3_resp.status_code}).", file=sys.stderr)
+        excerpt = s3_resp.text[:2000].strip()
+        if excerpt:
+            print(f"Server response:\n{excerpt}", file=sys.stderr)
         sys.exit(1)
 
     # Notify Overcast that the S3 upload is complete — this makes the file appear in the library.
@@ -212,10 +280,13 @@ def upload_file(session, filepath, form):
             f"(HTTP {notify_resp.status_code}).",
             file=sys.stderr,
         )
+        excerpt = notify_resp.text[:2000].strip()
+        if excerpt:
+            print(f"Server response:\n{excerpt}", file=sys.stderr)
         sys.exit(1)
 
 
-def run_setup(do_notify=False):
+def run_setup(do_notify=False, debug=False):
     print("overcast-upload setup\n")
 
     email, password = prompt_for_credentials()
@@ -227,7 +298,7 @@ def run_setup(do_notify=False):
     login(session, email, password)
     print("Login successful.\n")
 
-    form = get_upload_form(session)
+    form = get_upload_form(session, debug=debug)
     print(f"Upload form: {form.form_action}")
     print("\nSetup complete.")
     if do_notify:
@@ -250,10 +321,16 @@ def main():
         action="store_true",
         help="Show macOS notification on completion (used by Finder Quick Action)",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print diagnostic information to stderr",
+    )
+    parser.add_argument("--version", action="version", version=f"overcast-upload {VERSION}")
     args = parser.parse_args()
 
     if args.setup:
-        run_setup(do_notify=args.notify)
+        run_setup(do_notify=args.notify, debug=args.debug)
         return
 
     if not args.file:
@@ -275,8 +352,8 @@ def main():
 
     try:
         login(session, email, password)
-        form = get_upload_form(session)
-        upload_file(session, filepath, form)
+        form = get_upload_form(session, debug=args.debug)
+        upload_file(session, filepath, form, debug=args.debug)
     except SystemExit:
         if args.notify:
             notify("Overcast Upload Failed", f"Could not upload {filepath.name}.")

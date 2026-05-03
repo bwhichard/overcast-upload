@@ -47,7 +47,7 @@ bash install.sh
 overcast-upload --setup
 ```
 
-This prompts for your Overcast email and password and saves them to `~/.config/overcast-upload/credentials` (chmod 600). It then tests the login to confirm everything works.
+This prompts for your Overcast email and password, saves the email to `~/.config/overcast-upload/credentials`, and stores the password in the **macOS Keychain** (service `overcast-upload`). It then tests the login to confirm everything works.
 
 ## Usage
 
@@ -61,7 +61,7 @@ overcast-upload "episode.mp3"
 
 Right-click any `.mp3`, `.m4a`, `.aac`, `.wav`, or `.m4b` file in Finder → **Quick Actions** → **Upload to Overcast**.
 
-A macOS notification appears when the upload completes (or fails).
+A macOS notification appears when the upload completes or fails.
 
 To install the Quick Action:
 
@@ -79,24 +79,33 @@ The first time you use it, macOS may ask Python for permission to access files i
 |---|---|
 | `--setup` | Save Overcast credentials and verify they work |
 | `--notify` | Show macOS notification on completion (used by Quick Action) |
+| `--debug` | Print diagnostic info to stderr (form fields, S3 key) |
+| `--version` | Print version and exit |
 
 ## Credentials
 
-Credentials are stored in `~/.config/overcast-upload/credentials`:
+Credentials are looked up in this order:
 
-```
-email=you@example.com
-password=yourpassword
-```
+1. **Environment variables** — `OVERCAST_EMAIL` and `OVERCAST_PASSWORD`, if both are set
+2. **macOS Keychain** — email from `~/.config/overcast-upload/credentials`, password from Keychain service `overcast-upload`
+3. **Credentials file** — fallback for installs predating Keychain support (email and password both in the file)
 
-You can also set them as environment variables, which take precedence:
+`--setup` always writes to the Keychain by default. If the Keychain write fails, it falls back to storing the password in the credentials file (chmod 600) with a warning.
+
+### Environment variables
 
 ```bash
 export OVERCAST_EMAIL="you@example.com"
 export OVERCAST_PASSWORD="yourpassword"
 ```
 
-Environment variables are useful for automation, CI, or if you prefer to manage secrets with a tool like [1Password CLI](https://developer.1password.com/docs/cli/) (`op run`).
+Useful for CI, automation, or tools like [1Password CLI](https://developer.1password.com/docs/cli/) (`op run`).
+
+### Security notes
+
+- This tool imitates browser behavior: it POSTs your credentials to `overcast.fm/login` and holds the session cookie. **Use a strong, unique password** — ideally one you don't reuse elsewhere.
+- Passwords stored in environment variables are visible to any process that can read your environment. In shared or automated environments, use a secrets manager (`op run`, `direnv` with a vault, etc.).
+- If Overcast changes their web upload flow, the tool may stop working. Run `overcast-upload --debug` to get diagnostic output (form field names, S3 endpoint) safe to include in a bug report.
 
 ## How It Works
 
@@ -110,10 +119,13 @@ The tool reverse-engineers Overcast's web upload flow:
 ## Troubleshooting
 
 **"Login failed. Check your Overcast email and password."**
-Verify your credentials with `overcast-upload --setup`. If your password contains special characters, check that the credentials file saved them correctly.
+Re-run `overcast-upload --setup` to update your stored credentials. If using environment variables, verify them with `echo $OVERCAST_EMAIL`.
 
-**"Could not find upload form"**
-Overcast may have changed their site structure. Open an issue.
+**"Could not find upload form" or "Upload form is missing required S3 fields"**
+Overcast may have changed their site. Run `overcast-upload --debug` and open an issue with the output (it does not include credentials or field values, only field names and the form URL).
+
+**"Upload form action does not look like an S3 endpoint"**
+Same as above — Overcast's upload flow has changed. Open an issue with `--debug` output.
 
 **Quick Action doesn't appear in Finder**
 Right-click → Quick Actions → Customize and enable "Upload to Overcast". If it's not listed, re-run the install and restart Finder.
