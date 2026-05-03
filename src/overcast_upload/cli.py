@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Upload a podcast episode to Overcast.fm."""
 
 import argparse

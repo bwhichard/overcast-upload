@@ -1,7 +1,6 @@
 #!/bin/bash
 set -e
 
-INSTALL_PATH="/usr/local/bin/overcast-upload"
 WORKFLOW_SRC="Upload to Overcast.workflow"
 WORKFLOW_DEST="$HOME/Library/Services/Upload to Overcast.workflow"
 
@@ -9,16 +8,17 @@ echo "=== overcast-upload installer ==="
 echo
 
 # Install CLI
-echo "Installing overcast-upload to $INSTALL_PATH..."
-sudo mkdir -p /usr/local/bin
-sudo cp overcast-upload "$INSTALL_PATH"
-sudo chmod +x "$INSTALL_PATH"
-echo "Done."
-echo
-
-# Install Python dependency
-echo "Installing Python dependency (requests)..."
-pip3 install --quiet requests
+echo "Installing overcast-upload..."
+if command -v pipx &>/dev/null; then
+    pipx install .
+elif command -v pip3 &>/dev/null; then
+    echo "Note: pipx not found — install it for a cleaner setup: brew install pipx && pipx ensurepath"
+    echo "Falling back to: pip3 install --user ."
+    pip3 install --user .
+else
+    echo "Error: Python 3 not found. Install it and try again."
+    exit 1
+fi
 echo "Done."
 echo
 

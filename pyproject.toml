@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "overcast-upload"
+version = "1.0"
+description = "Upload podcast episodes to Overcast.fm from the command line"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+dependencies = ["requests>=2.28.0"]
+
+[project.scripts]
+overcast-upload = "overcast_upload.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
