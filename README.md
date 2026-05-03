@@ -118,6 +118,13 @@ Overcast may have changed their site structure. Open an issue.
 **Quick Action doesn't appear in Finder**
 Right-click → Quick Actions → Customize and enable "Upload to Overcast". If it's not listed, re-run the install and restart Finder.
 
+**Quick Action fails with "No module named 'requests'"**
+The Automator environment uses a different Python than your terminal. This happens most often with [pyenv](https://github.com/pyenv/pyenv). Fix it by adding your pyenv shims to the Quick Action's PATH. Open `~/Library/Services/Upload to Overcast.workflow/Contents/document.wflow` in a text editor and change the PATH export to:
+
+```
+export PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.pyenv/shims:$PATH"
+```
+
 ## File structure
 
 ```
