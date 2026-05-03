@@ -7,9 +7,9 @@ A macOS CLI and Finder Quick Action for uploading podcast episodes directly to [
 Overcast lets you upload private audio files to your account so you can listen before publishing. Normally you have to log into the web UI, navigate to the uploads page, and manually select a file. This tool automates that entire flow from the command line or with a right-click in Finder.
 
 ```bash
-overcast-upload "SDT 570.mp3"
-# Uploading SDT 570.mp3 (44.2 MB)...
-# Done! SDT 570.mp3 uploaded to Overcast.
+overcast-upload "Example.mp3"
+# Uploading Example.mp3 (44.2 MB)...
+# Done! Example.mp3 uploaded to Overcast.
 ```
 
 ## Requirements
